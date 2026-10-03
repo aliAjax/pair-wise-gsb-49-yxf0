@@ -17,6 +17,14 @@
   <h1>再保险合约与巨灾暴露管理</h1>
   <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
   <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
+  <h2>可重算摊回台账（只读）</h2>
+  <div class="row">
+    <button id="l-years">合约年度</button>
+    <button id="l-events">巨灾事件</button>
+    <button id="l-claims">赔案</button>
+    <button id="l-summary">2026年度汇总</button>
+    <button id="l-audit">台账审计</button>
+  </div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
 </main>
 <script>
@@ -28,6 +36,11 @@ async function show(path) {
 }
 document.getElementById("load").onclick = () => show("/api/records?limit=20");
 document.getElementById("stats").onclick = () => show("/api/stats");
+document.getElementById("l-years").onclick = () => show("/api/ledger/treaty-years");
+document.getElementById("l-events").onclick = () => show("/api/ledger/events");
+document.getElementById("l-claims").onclick = () => show("/api/ledger/claims");
+document.getElementById("l-summary").onclick = () => show("/api/ledger/treaty-years/2026/summary");
+document.getElementById("l-audit").onclick = () => show("/api/ledger/audit");
 </script>
 </body>
 </html>

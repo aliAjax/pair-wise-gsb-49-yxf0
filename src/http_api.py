@@ -13,8 +13,21 @@ RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
 
+# 可重算台账路由
+L_YEAR_SUMMARY_RE = re.compile(r"^/api/ledger/treaty-years/([^/]+)/summary$")
+L_YEAR_ID_RE = re.compile(r"^/api/ledger/treaty-years/([^/]+)$")
+L_EVENT_ID_RE = re.compile(r"^/api/ledger/events/([^/]+)$")
+L_EVENT_WITHDRAW_RE = re.compile(r"^/api/ledger/events/([^/]+)/withdraw$")
+L_CLAIM_ID_RE = re.compile(r"^/api/ledger/claims/([^/]+)$")
+L_CLAIM_RESERVE_RE = re.compile(r"^/api/ledger/claims/([^/]+)/reserve$")
+L_CLAIM_BACKFILL_RE = re.compile(r"^/api/ledger/claims/([^/]+)/backfill$")
+L_CLAIM_RELEASE_RE = re.compile(r"^/api/ledger/claims/([^/]+)/release$")
+L_CLAIM_SETTLE_RE = re.compile(r"^/api/ledger/claims/([^/]+)/settle$")
+L_BATCH_ID_RE = re.compile(r"^/api/ledger/batches/([^/]+)$")
+L_YEAR_RECOMPUTE_RE = re.compile(r"^/api/ledger/treaty-years/([^/]+)/recompute$")
 
-def make_handler(service: Any, static_dir: Path):
+
+def make_handler(service: Any, static_dir: Path, ledger_service: Any = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "reinsurance-exposure/1.0"
 
@@ -87,6 +100,9 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if ledger_service is not None and parsed.path.startswith("/api/ledger/"):
+                    self._handle_ledger_get(parsed)
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -98,6 +114,9 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if ledger_service is not None and parsed.path.startswith("/api/ledger/"):
+                    self._handle_ledger_post(parsed, body)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
@@ -111,8 +130,97 @@ def make_handler(service: Any, static_dir: Path):
             except Exception as exc:
                 self._handle_error(exc)
 
+        def _handle_ledger_get(self, parsed) -> None:
+            actor = self._actor()
+            path = parsed.path
+            if path == "/api/ledger/treaty-years":
+                self._send(200, {"items": ledger_service.list_treaty_years(actor)})
+                return
+            match = L_YEAR_SUMMARY_RE.match(path)
+            if match:
+                self._send(200, ledger_service.year_summary(actor, match.group(1)))
+                return
+            if path == "/api/ledger/events":
+                self._send(200, {"items": ledger_service.list_events(actor)})
+                return
+            match = L_EVENT_ID_RE.match(path)
+            if match and not path.endswith("/withdraw"):
+                with ledger_service.repository.tx() as conn:
+                    self._send(200, ledger_service._resolve_event_key(conn, match.group(1)))
+                return
+            if path == "/api/ledger/claims":
+                query = parse_qs(parsed.query)
+                self._send(200, {"items": ledger_service.list_claims(actor, status=query.get("status", [None])[0])})
+                return
+            match = L_CLAIM_ID_RE.match(path)
+            if match and not any(path.endswith(suffix) for suffix in ("/reserve", "/backfill", "/release", "/settle")):
+                self._send(200, ledger_service.get_claim(actor, match.group(1)))
+                return
+            match = L_BATCH_ID_RE.match(path)
+            if match:
+                self._send(200, ledger_service.batch_status(actor, match.group(1)))
+                return
+            if path == "/api/ledger/audit":
+                query = parse_qs(parsed.query)
+                entity = query.get("entity", [None])[0]
+                entity_id = query.get("entity_id", [None])[0]
+                self._send(200, {"items": ledger_service.audit_timeline(actor, entity=entity, entity_id=int(entity_id) if entity_id else None)})
+                return
+            self._send(404, {"error": "not_found", "message": "台账路径不存在"})
+
+        def _handle_ledger_post(self, parsed, body) -> None:
+            actor = self._actor()
+            path = parsed.path
+            data = body.get("data", body) if isinstance(body, dict) else {}
+
+            if path == "/api/ledger/treaty-years":
+                self._send(201, ledger_service.setup_treaty_year(actor, data))
+                return
+            if path == "/api/ledger/events":
+                self._send(201, ledger_service.register_event(actor, data))
+                return
+            if path == "/api/ledger/claims":
+                self._send(201, ledger_service.register_claim(actor, data))
+                return
+            if path == "/api/ledger/claims/batch-reserve" or path == "/api/ledger/batches/reserve":
+                self._send(200, ledger_service.batch_reserve(actor, data))
+                return
+            match = L_YEAR_RECOMPUTE_RE.match(path)
+            if match:
+                self._send(200, ledger_service.recompute_year(actor, match.group(1)))
+                return
+            match = L_YEAR_SUMMARY_RE.match(path)
+            if match:
+                self._send(200, ledger_service.year_summary(actor, match.group(1)))
+                return
+            match = L_EVENT_WITHDRAW_RE.match(path)
+            if match:
+                self._send(200, ledger_service.withdraw_event(actor, match.group(1), data))
+                return
+            match = L_EVENT_ID_RE.match(path)
+            if match:
+                self._send(200, ledger_service.amend_event(actor, match.group(1), data))
+                return
+            match = L_CLAIM_RESERVE_RE.match(path)
+            if match:
+                self._send(200, ledger_service.reserve_claim(actor, match.group(1), data))
+                return
+            match = L_CLAIM_BACKFILL_RE.match(path)
+            if match:
+                self._send(200, ledger_service.backfill_claim(actor, match.group(1), data))
+                return
+            match = L_CLAIM_RELEASE_RE.match(path)
+            if match:
+                self._send(200, ledger_service.release_claim(actor, match.group(1), data))
+                return
+            match = L_CLAIM_SETTLE_RE.match(path)
+            if match:
+                self._send(200, ledger_service.settle_claim(actor, match.group(1), data))
+                return
+            self._send(404, {"error": "not_found", "message": "台账路径不存在"})
+
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, static_dir: Path, ledger_service: Any = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, static_dir, ledger_service))
