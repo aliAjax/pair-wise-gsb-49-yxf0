@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.audit import AuditRecorder
 from src.http_api import create_server
+from src.ledger_service import LedgerService
 from src.repository import Repository
 from src.rules import DomainRules
 from src.service import Service
@@ -20,6 +21,10 @@ def build_service(db_path: str) -> Service:
     return Service(repository, DomainRules(), audit)
 
 
+def build_ledger_service(db_path: str) -> LedgerService:
+    return LedgerService(Repository(db_path))
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="再保险合约与巨灾暴露管理")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="SQLite数据库路径")
@@ -32,7 +37,8 @@ def main() -> None:
     args = parse_args()
     Path(args.db).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     service = build_service(args.db)
-    server = create_server(args.host, args.port, service, BASE_DIR / "static")
+    ledger_service = build_ledger_service(args.db)
+    server = create_server(args.host, args.port, service, BASE_DIR / "static", ledger_service)
     print("再保险合约与巨灾暴露管理 listening on http://%s:%s" % (args.host, args.port), flush=True)
     try:
         server.serve_forever()
